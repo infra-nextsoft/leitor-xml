@@ -1,0 +1,81 @@
+@import url('https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300..800;1,300..800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Open Sans', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  /* Force Light Scheme */
+  color-scheme: light;
+  
+  /* Brand Colors */
+  --brand-navy: #010624;
+  --brand-blue: #2B46CC;
+  --brand-melon: #F6714F;
+  --brand-sun: #FFB448;
+
+  /* Explicit Defaults for Font Visibility */
+  color: #010624;
+  background-color: #FFFFFF;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  place-content: center;
+  min-width: 320px;
+  min-height: 100vh;
+  background-color: #FFFFFF;
+  /* TODAS as letras agora herdam essa cor por padrão */
+  color: #010624 !important; 
+}
+
+#root {
+  width: 100%;
+}
+
+/* Garante que elementos de formulário e botões também usem a cor da marca se não especificado */
+input, select, textarea, button {
+  font-family: inherit;
+  color: inherit;
+}
+
+/* Premium Scrollbar */
+@layer utilities {
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-slate-200 rounded-full hover:bg-slate-300 transition-colors;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* Custom Selection using Brand Blue */
+::selection {
+  background-color: rgba(43, 70, 204, 0.1);
+  color: #2B46CC;
+}
