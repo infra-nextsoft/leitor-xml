@@ -109,6 +109,12 @@ export function SettingsPanel() {
       return;
     }
 
+    if (!formData.apiVersion || !formData.apiVersion.trim()) {
+      setSaveStatus('error');
+      setErrorMessage('A Versão da API é obrigatória (ex: 1.14).');
+      return;
+    }
+
     if (formData.cnpjPadrao && formData.cnpjPadrao.length !== 14) {
       setSaveStatus('error');
       setErrorMessage('O CNPJ Padrão deve conter exatamente 14 dígitos.');
@@ -161,6 +167,23 @@ export function SettingsPanel() {
                 />
                 <span className="text-[9px] text-brand-navy/40 mt-1 block uppercase font-medium tracking-[0.1em]">
                   Endpoint local onde a API do Gin6 Concentrador está rodando.
+                </span>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-brand-navy/60 uppercase tracking-[0.2em] mb-2 block">
+                  Versão da API do Concentrador
+                </label>
+                <input
+                  type="text"
+                  name="apiVersion"
+                  value={formData.apiVersion || ''}
+                  onChange={handleInputChange}
+                  placeholder="1.14"
+                  className="w-full bg-white border border-brand-blue/10 rounded px-3 py-2.5 text-xs font-mono font-bold text-brand-navy focus:border-brand-blue outline-none transition-all shadow-sm"
+                />
+                <span className="text-[9px] text-brand-navy/40 mt-1 block uppercase font-medium tracking-[0.1em]">
+                  Versão da API utilizada nos parâmetros das requisições do Concentrador (ex: 1.14, 1.12).
                 </span>
               </div>
 

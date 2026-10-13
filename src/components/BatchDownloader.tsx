@@ -147,7 +147,8 @@ export default function BatchDownloader() {
         };
 
         try {
-          const response = await fetch(`${settings.apiUrl}/api/v1/nfce/HomologarVendaXML?api-version=1.12`, {
+          const apiVersion = settings.apiVersion || '1.14';
+          const response = await fetch(`${settings.apiUrl}/api/v1/nfce/HomologarVendaXML?api-version=${apiVersion}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),

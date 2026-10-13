@@ -196,9 +196,10 @@ export default function NfceInutilization() {
         };
 
     try {
+      const apiVersion = settings.apiVersion || '1.14';
       const endpoint = formData.mod === '55'
-        ? `${settings.apiUrl}/api/nfe/Inutilizacao?api-version=1.12`
-        : `${settings.apiUrl}/api/v1/nfce/Inutilizacao?api-version=1.12`;
+        ? `${settings.apiUrl}/api/nfe/Inutilizacao?api-version=${apiVersion}`
+        : `${settings.apiUrl}/api/v1/nfce/Inutilizacao?api-version=${apiVersion}`;
 
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -303,9 +304,10 @@ export default function NfceInutilization() {
           };
 
       try {
+        const apiVersion = settings.apiVersion || '1.14';
         const endpoint = row.mod === '55'
-          ? `${settings.apiUrl}/api/nfe/Inutilizacao?api-version=1.12`
-          : `${settings.apiUrl}/api/v1/nfce/Inutilizacao?api-version=1.12`;
+          ? `${settings.apiUrl}/api/nfe/Inutilizacao?api-version=${apiVersion}`
+          : `${settings.apiUrl}/api/v1/nfce/Inutilizacao?api-version=${apiVersion}`;
 
         const response = await fetch(endpoint, {
           method: 'POST',

@@ -1,10 +1,11 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { Upload, FileCode, FolderSearch, Loader2, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import JSZip from 'jszip';
 
 interface FileUploadProps {
   onProcessingStart: () => void;
-  onProgress: (current: number, total: number, batch: any[]) => void;
+  onProgress: (current: number, total: number, batch: any[], cancellationsBatch?: any[]) => void;
   onComplete: () => void;
   onClear?: () => void;
 }
@@ -15,13 +16,44 @@ export function FileUpload({ onProcessingStart, onProgress, onComplete, onClear 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
-  const processFiles = useCallback((files: FileList | File[]) => {
-    const xmlFiles = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.xml'));
-    
-    if (xmlFiles.length === 0) return;
+  const processFiles = useCallback(async (files: FileList | File[]) => {
+    const filesArray = Array.from(files);
+    const directXmls = filesArray.filter(f => f.name.toLowerCase().endsWith('.xml'));
+    const zipFiles = filesArray.filter(f => f.name.toLowerCase().endsWith('.zip'));
+
+    if (directXmls.length === 0 && zipFiles.length === 0) return;
 
     setIsProcessing(true);
     onProcessingStart();
+
+    const xmlFiles: File[] = [...directXmls];
+
+    if (zipFiles.length > 0) {
+      for (const zipFile of zipFiles) {
+        try {
+          const zip = new JSZip();
+          const zipContent = await zip.loadAsync(zipFile);
+          
+          for (const relativePath of Object.keys(zipContent.files)) {
+            const zipEntry = zipContent.files[relativePath];
+            if (!zipEntry.dir && relativePath.toLowerCase().endsWith('.xml')) {
+              const xmlText = await zipEntry.async('string');
+              const baseName = relativePath.split(/[/\\]/).pop() || relativePath;
+              const extractedFile = new File([xmlText], baseName, { type: 'text/xml' });
+              xmlFiles.push(extractedFile);
+            }
+          }
+        } catch (err) {
+          console.error(`Erro ao descompactar arquivo ZIP ${zipFile.name}:`, err);
+        }
+      }
+    }
+
+    if (xmlFiles.length === 0) {
+      setIsProcessing(false);
+      onComplete();
+      return;
+    }
 
     // Determine optimal number of workers (max 4 to prevent CPU exhaustion)
     const numWorkers = Math.min(navigator.hardwareConcurrency || 4, 4);
@@ -56,11 +88,11 @@ export function FileUpload({ onProcessingStart, onProgress, onComplete, onClear 
       worker.postMessage({ files: chunk });
 
       worker.onmessage = (e) => {
-        const { type, current, batch } = e.data;
+        const { type, current, batch, cancellationsBatch } = e.data;
         if (type === 'PROGRESS') {
           processedCounts[i] = current;
           const aggregatedCurrent = processedCounts.reduce((sum, count) => sum + count, 0);
-          onProgress(aggregatedCurrent, xmlFiles.length, batch);
+          onProgress(aggregatedCurrent, xmlFiles.length, batch || [], cancellationsBatch || []);
         } else if (type === 'COMPLETE') {
           completedWorkers++;
           if (completedWorkers === activeWorkersCount) {
@@ -105,7 +137,7 @@ export function FileUpload({ onProcessingStart, onProgress, onComplete, onClear 
       <input 
         type="file" 
         multiple 
-        accept=".xml" 
+        accept=".xml,.zip" 
         className="hidden" 
         ref={fileInputRef}
         onChange={(e) => e.target.files && processFiles(e.target.files)}
@@ -137,7 +169,7 @@ export function FileUpload({ onProcessingStart, onProgress, onComplete, onClear 
           <p className="text-brand-navy/70 text-[11px] font-bold max-w-xs leading-relaxed">
             {isProcessing 
               ? "Aguarde enquanto processamos os XMLs localmente..." 
-              : "Arraste seus arquivos aqui ou use as opções ao lado."}
+              : "Arraste seus arquivos (.xml, .zip) aqui ou use as opções ao lado."}
           </p>
         </div>
       </div>

@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo } from 'react'
 import * as XLSX from 'xlsx'
-import { db, XMLRecord } from './lib/db'
+import { db, XMLRecord, CancellationRecord } from './lib/db'
 import { FileUpload } from './components/FileUpload'
 import { XMLTable } from './components/XMLTable'
-import { ExcelComparison, type CompareItem } from './components/ExcelComparison'
+import { CancelledSalesCard } from './components/CancelledSalesCard'
+import { ExcelComparison, type CnpjCompareState } from './components/ExcelComparison'
 import { GapAnalysis } from './components/GapAnalysis'
 import { ApiDownloader } from './components/ApiDownloader'
 import BatchDownloader from './components/BatchDownloader'
@@ -11,7 +12,7 @@ import NfceInutilization from './components/NfceInutilization'
 import { XmlGenerator } from './components/XmlGenerator'
 import { SettingsPanel } from './components/SettingsPanel'
 import { SefazSpSaeDownloader } from './components/SefazSpSaeDownloader'
-import { formatCurrency, cn } from './lib/utils'
+import { formatCurrency, formatCNPJ, cn } from './lib/utils'
 import { 
   Database, 
   TrendingUp, 
@@ -23,28 +24,89 @@ import {
   Settings, 
   ChevronRight, 
   ArrowLeft,
-  DownloadCloud
+  DownloadCloud,
+  Building2,
+  X,
+  AlertCircle,
+  Code2
 } from 'lucide-react'
+import { SqlScriptGenerator } from './components/SqlScriptGenerator'
 
 
 function App() {
   const [records, setRecords] = useState<XMLRecord[]>([])
+  const [cancellations, setCancellations] = useState<CancellationRecord[]>([])
   const [progress, setProgress] = useState({ current: 0, total: 0 })
   const [isProcessing, setIsProcessing] = useState(false)
-  const [activeModule, setActiveModule] = useState<'home' | 'analyze' | 'homologate' | 'inutilize' | 'generate_xml' | 'settings' | 'sefaz_sp'>('home')
+  const [activeModule, setActiveModule] = useState<'home' | 'analyze' | 'homologate' | 'inutilize' | 'generate_xml' | 'settings' | 'sefaz_sp' | 'sql_generator'>('home')
   const [activeTab, setActiveTab] = useState<'import' | 'compare' | 'gaps' | 'homologate' | 'batch_homologate' | 'inutilize' | 'generate_xml' | 'settings'>('import')
   const [selectedMod, setSelectedMod] = useState<'all' | '55' | '65'>('all')
+  const [selectedCnpj, setSelectedCnpj] = useState<string>('all')
 
-  // Excel comparison state persistence
-  const [missingInExcel, setMissingInExcel] = useState<CompareItem[]>([]);
-  const [missingInXml, setMissingInXml] = useState<CompareItem[]>([]);
-  const [compareDone, setCompareDone] = useState(false);
-  const [excelFileName, setExcelFileName] = useState<string>('');
+  // Excel comparison state persistence per CNPJ
+  const [compareStateByCnpj, setCompareStateByCnpj] = useState<Record<string, CnpjCompareState>>({});
+
+  // Modal de exclusão por CNPJ
+  const [isClearModalOpen, setIsClearModalOpen] = useState(false);
+  const [selectedClearCnpj, setSelectedClearCnpj] = useState<string>('all');
+
+  const cnpjsList = useMemo(() => {
+    const map = new Map<string, { cnpj: string; name: string; count: number; bruto: number }>();
+    records.forEach(rec => {
+      let cnpj = rec.cnpjEmit;
+      if (!cnpj || cnpj === 'Não informado') {
+        if (rec.chave && rec.chave.length === 44) {
+          cnpj = rec.chave.slice(6, 20);
+        } else {
+          cnpj = 'Outros';
+        }
+      }
+      const name = rec.xNomeEmit || '';
+      const existing = map.get(cnpj);
+      if (existing) {
+        existing.count++;
+        existing.bruto += rec.vProd;
+        if (!existing.name && name) existing.name = name;
+      } else {
+        map.set(cnpj, { cnpj, name, count: 1, bruto: rec.vProd });
+      }
+    });
+
+    // Inclui também CNPJs identificados a partir de eventos de cancelamento
+    cancellations.forEach(c => {
+      let cnpj = c.cnpjEmit;
+      if (!cnpj || cnpj === 'Não informado') {
+        if (c.chave && c.chave.length === 44) {
+          cnpj = c.chave.slice(6, 20);
+        } else {
+          cnpj = 'Outros';
+        }
+      }
+      if (cnpj && !map.has(cnpj)) {
+        map.set(cnpj, { cnpj, name: '', count: 0, bruto: 0 });
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) => b.count - a.count);
+  }, [records, cancellations]);
 
   const filteredRecords = useMemo(() => {
-    if (selectedMod === 'all') return records;
-    return records.filter(rec => rec.mod === selectedMod);
-  }, [records, selectedMod]);
+    return records.filter(rec => {
+      if (selectedMod !== 'all' && rec.mod !== selectedMod) return false;
+      if (selectedCnpj !== 'all') {
+        let cnpj = rec.cnpjEmit;
+        if (!cnpj || cnpj === 'Não informado') {
+          if (rec.chave && rec.chave.length === 44) {
+            cnpj = rec.chave.slice(6, 20);
+          } else {
+            cnpj = 'Outros';
+          }
+        }
+        if (cnpj !== selectedCnpj) return false;
+      }
+      return true;
+    });
+  }, [records, selectedMod, selectedCnpj]);
 
   useEffect(() => {
     loadRecords()
@@ -54,6 +116,20 @@ function App() {
     const allRecords = await db.xmlRecords.toArray()
     const sorted = allRecords.sort((a, b) => b.dhEmi.localeCompare(a.dhEmi));
     setRecords(sorted)
+
+    const allCancels = await db.cancellations.toArray();
+    // Limpeza automática de chaves truncadas/corrompidas (menos de 44 dígitos)
+    const corrupted = allCancels.filter(c => !c.chave || c.chave.length !== 44);
+    if (corrupted.length > 0) {
+      await db.cancellations.bulkDelete(corrupted.map(c => c.chave));
+    }
+    const validCancels = allCancels.filter(c => c.chave && c.chave.length === 44);
+    const sortedCancels = validCancels.sort((a, b) => {
+      const dateA = a.dhRegEvento || a.dhEvento || '';
+      const dateB = b.dhRegEvento || b.dhEvento || '';
+      return dateB.localeCompare(dateA);
+    });
+    setCancellations(sortedCancels);
   }
 
   const handleProcessingStart = () => {
@@ -61,9 +137,14 @@ function App() {
     setProgress({ current: 0, total: 0 })
   }
 
-  const handleProgress = async (current: number, total: number, batch: XMLRecord[]) => {
+  const handleProgress = async (current: number, total: number, batch: XMLRecord[], cancellationsBatch?: CancellationRecord[]) => {
     setProgress({ current, total })
-    await db.xmlRecords.bulkPut(batch)
+    if (batch && batch.length > 0) {
+      await db.xmlRecords.bulkPut(batch)
+    }
+    if (cancellationsBatch && cancellationsBatch.length > 0) {
+      await db.cancellations.bulkPut(cancellationsBatch)
+    }
   }
 
   const handleComplete = async () => {
@@ -71,24 +152,88 @@ function App() {
     await loadRecords()
   }
 
-  const clearDatabase = async () => {
-    if (confirm('Tem certeza que deseja apagar todos os registros importados? Isso limpará seu banco de dados local.')) {
-      await db.xmlRecords.clear()
-      setRecords([])
+  const handleOpenClearModal = () => {
+    setSelectedClearCnpj('all');
+    setIsClearModalOpen(true);
+  };
+
+  const handleConfirmClear = async () => {
+    if (selectedClearCnpj === 'all') {
+      await db.xmlRecords.clear();
+      await db.cancellations.clear();
+      setCompareStateByCnpj({});
+      setRecords([]);
+      setCancellations([]);
+      setSelectedCnpj('all');
+    } else {
+      const allRecs = await db.xmlRecords.toArray();
+      const idsToDelete = allRecs
+        .filter(rec => {
+          let cnpj = rec.cnpjEmit;
+          if (!cnpj || cnpj === 'Não informado') {
+            if (rec.chave && rec.chave.length === 44) {
+              cnpj = rec.chave.slice(6, 20);
+            } else {
+              cnpj = 'Outros';
+            }
+          }
+          return cnpj === selectedClearCnpj;
+        })
+        .map(rec => rec.id)
+        .filter((id): id is number => id !== undefined);
+
+      await db.xmlRecords.bulkDelete(idsToDelete);
+
+      const allCancels = await db.cancellations.toArray();
+      const cancelKeysToDelete = allCancels
+        .filter(c => {
+          let cnpj = c.cnpjEmit;
+          if (!cnpj || cnpj === 'Não informado') {
+            if (c.chave && c.chave.length === 44) {
+              cnpj = c.chave.slice(6, 20);
+            } else {
+              cnpj = 'Outros';
+            }
+          }
+          return cnpj === selectedClearCnpj;
+        })
+        .map(c => c.chave);
+
+      await db.cancellations.bulkDelete(cancelKeysToDelete);
+
+      setCompareStateByCnpj(prev => {
+        const copy = { ...prev };
+        delete copy[selectedClearCnpj];
+        return copy;
+      });
+
+      setSelectedCnpj('all');
     }
-  }
+
+    setIsClearModalOpen(false);
+    await loadRecords();
+  };
+
+  const cancelledKeysSet = useMemo(() => {
+    return new Set(cancellations.map(c => c.chave.trim()));
+  }, [cancellations]);
 
   const exportToExcel = () => {
-    const exportData = records.map(r => ({
-      'Chave de Acesso': r.chave || '---',
-      'Nº Cupom': r.nNF,
-      'Data Emissão': r.dhEmi,
-      'CPF Cliente': r.cpf,
-      'Valor Bruto': r.vProd,
-      'Valor Desconto': r.vDesc,
-      'Valor Líquido': r.vNF,
-      'Arquivo': r.fileName
-    }));
+    const exportData = records.map(r => {
+      const isCancelled = cancelledKeysSet.has(r.chave.trim());
+      return {
+        'Chave de Acesso': r.chave || '---',
+        'Nº Cupom': r.nNF,
+        'Série': r.serie || '---',
+        'Situação': isCancelled ? 'Cancelada' : 'Autorizada',
+        'Data Emissão': r.dhEmi,
+        'CPF Cliente': r.cpf,
+        'Valor Bruto': r.vProd,
+        'Valor Desconto': r.vDesc,
+        'Valor Líquido': r.vNF,
+        'Arquivo': r.fileName
+      };
+    });
 
     const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
@@ -96,14 +241,17 @@ function App() {
     XLSX.writeFile(wb, `relatorio_nfce_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
+  // Exclui vendas canceladas dos totais financeiros
   const totals = useMemo(() => {
-    return filteredRecords.reduce((acc, rec) => ({
-      count: acc.count + 1,
-      bruto: acc.bruto + rec.vProd,
-      desc: acc.desc + rec.vDesc,
-      liquido: acc.liquido + rec.vNF
-    }), { count: 0, bruto: 0, desc: 0, liquido: 0 })
-  }, [filteredRecords])
+    return filteredRecords
+      .filter(rec => !cancelledKeysSet.has(rec.chave.trim()))
+      .reduce((acc, rec) => ({
+        count: acc.count + 1,
+        bruto: acc.bruto + rec.vProd,
+        desc: acc.desc + rec.vDesc,
+        liquido: acc.liquido + rec.vNF
+      }), { count: 0, bruto: 0, desc: 0, liquido: 0 });
+  }, [filteredRecords, cancelledKeysSet]);
 
   return (
     <div className="min-h-screen bg-white text-brand-navy p-4 md:p-8 selection:bg-brand-blue/10">
@@ -249,6 +397,25 @@ function App() {
                 </div>
               </div>
 
+              {/* Card 7: Gerador de Script SQL (GRN) */}
+              <div 
+                onClick={() => { setActiveModule('sql_generator'); }}
+                className="bg-white border border-brand-blue/5 p-6 rounded-md shadow-[0_2px_10px_-2px_rgba(1,6,36,0.03)] hover:border-brand-blue/30 cursor-pointer transition-all hover:translate-y-[-2px] hover:shadow-[0_10px_25px_-5px_rgba(1,6,36,0.06)] group flex flex-col justify-between min-h-[180px]"
+              >
+                <div className="flex justify-between items-start">
+                  <div className="p-3 bg-slate-50 rounded-md border border-slate-100 shadow-sm group-hover:bg-brand-blue/5 group-hover:border-brand-blue/20 transition-all">
+                    <Code2 className="text-brand-blue w-5 h-5" />
+                  </div>
+                  <ChevronRight size={14} className="text-brand-navy/20 group-hover:text-brand-blue transition-colors" />
+                </div>
+                <div className="mt-4">
+                  <h3 className="text-brand-navy text-[10px] font-black uppercase tracking-[0.2em] mb-1.5">Gerador de Script SQL</h3>
+                  <p className="text-brand-navy/50 text-[10px] uppercase tracking-[0.1em] font-medium leading-relaxed">
+                    Geração automatizada de comandos UPDATE para correção de vendas do sistema GRN no Microsoft SQL Server.
+                  </p>
+                </div>
+              </div>
+
 
             </div>
 
@@ -277,6 +444,7 @@ function App() {
                   {activeModule === 'generate_xml' && 'Geração de XML'}
                   {activeModule === 'settings' && 'Configurações'}
                   {activeModule === 'sefaz_sp' && 'Consulta SEFAZ-SP (SAE)'}
+                  {activeModule === 'sql_generator' && 'Gerador de Script SQL (GRN)'}
                 </h2>
               </div>
             </div>
@@ -342,7 +510,7 @@ function App() {
                     onProcessingStart={handleProcessingStart}
                     onProgress={handleProgress}
                     onComplete={handleComplete}
-                    onClear={records.length > 0 ? clearDatabase : undefined}
+                    onClear={(records.length > 0 || cancellations.length > 0) ? handleOpenClearModal : undefined}
                   />
 
                   {isProcessing && (
@@ -367,21 +535,114 @@ function App() {
                   )}
 
                   <div className="space-y-12 mt-8">
-                    {records.length > 0 && (
+                    {(records.length > 0 || cancellations.length > 0) && (
                       <>
-                        {/* Painel de Indicadores Globais na Tela de Análise */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                          <StatCard title="Total Cupons" value={totals.count.toLocaleString('pt-BR')} icon={<ReceiptText className="text-brand-blue" />} />
-                          <StatCard title="Valor Bruto" value={formatCurrency(totals.bruto)} icon={<TrendingUp className="text-emerald-500" />} highlight />
-                          <StatCard title="Total Descontos" value={formatCurrency(totals.desc)} icon={<TrendingUp className="text-brand-melon rotate-180" />} danger />
-                          <StatCard title="Valor Líquido" value={formatCurrency(totals.liquido)} icon={<Database className="text-brand-navy" />} />
-                        </div>
+                        {/* Painel de CNPJs / Empresas Identificadas */}
+                        {cnpjsList.length > 1 && (
+                          <div className="bg-white border border-brand-blue/10 p-5 rounded-md shadow-[0_2px_15px_-3px_rgba(1,6,36,0.04)] space-y-3 animate-in fade-in duration-500">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                              <div className="flex items-center gap-2">
+                                <Building2 className="text-brand-blue w-4 h-4" />
+                                <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-navy">
+                                  Empresas / CNPJs Identificados ({cnpjsList.length})
+                                </h3>
+                              </div>
+                              <span className="text-[9px] text-brand-navy/60 uppercase font-medium">Clique em uma empresa para filtrar a análise</span>
+                            </div>
 
-                        <XMLTable records={filteredRecords} selectedMod={selectedMod} onModChange={setSelectedMod} />
-                        <GapAnalysis records={filteredRecords} />
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              <button
+                                onClick={() => setSelectedCnpj('all')}
+                                className={cn(
+                                  "px-3.5 py-2.5 rounded-md text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 active:scale-95",
+                                  selectedCnpj === 'all'
+                                    ? "bg-brand-blue text-white shadow-md shadow-brand-blue/20"
+                                    : "bg-slate-50 text-brand-navy/70 hover:bg-slate-100 border border-slate-200/60"
+                                )}
+                              >
+                                <span>Todos os CNPJs</span>
+                                <span className={cn("px-1.5 py-0.5 rounded text-[9px] font-mono font-bold", selectedCnpj === 'all' ? "bg-white/20 text-white" : "bg-slate-200 text-brand-navy")}>
+                                  {records.length}
+                                </span>
+                              </button>
+
+                              {cnpjsList.map(item => (
+                                <button
+                                  key={item.cnpj}
+                                  onClick={() => setSelectedCnpj(item.cnpj)}
+                                  className={cn(
+                                    "px-3.5 py-2.5 rounded-md text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-3 active:scale-95 text-left border",
+                                    selectedCnpj === item.cnpj
+                                      ? "bg-brand-blue border-brand-blue text-white shadow-md shadow-brand-blue/20"
+                                      : "bg-slate-50 border-slate-200/60 text-brand-navy/80 hover:bg-slate-100"
+                                  )}
+                                >
+                                  <div>
+                                    <span className="font-mono font-bold block">{formatCNPJ(item.cnpj)}</span>
+                                    {item.name && <span className={cn("text-[9px] block truncate max-w-[150px] font-medium", selectedCnpj === item.cnpj ? "text-white/80" : "text-brand-navy/60")}>{item.name}</span>}
+                                  </div>
+                                  <span className={cn("px-1.5 py-0.5 rounded text-[9px] font-mono font-bold shrink-0", selectedCnpj === item.cnpj ? "bg-white/20 text-white" : "bg-slate-200 text-brand-navy")}>
+                                    {item.count}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Painel de Indicadores Globais na Tela de Análise */}
+                        {records.length > 0 && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                            <StatCard 
+                              title="Total Válidas" 
+                              value={totals.count.toLocaleString('pt-BR')} 
+                              icon={<ReceiptText className="text-brand-blue" />} 
+                            />
+                            <StatCard 
+                              title="Valor Bruto Válido" 
+                              value={formatCurrency(totals.bruto)} 
+                              icon={<TrendingUp className="text-emerald-500" />} 
+                              highlight 
+                            />
+                            <StatCard 
+                              title="Total Descontos" 
+                              value={formatCurrency(totals.desc)} 
+                              icon={<TrendingUp className="text-brand-melon rotate-180" />} 
+                              danger 
+                            />
+                            <StatCard 
+                              title="Valor Líquido Válido" 
+                              value={formatCurrency(totals.liquido)} 
+                              icon={<Database className="text-brand-navy" />} 
+                            />
+                          </div>
+                        )}
+
+                        {/* CARD DE VENDAS CANCELADAS */}
+                        <CancelledSalesCard 
+                          cancellations={cancellations}
+                          records={records}
+                          selectedCnpj={selectedCnpj}
+                        />
+
+                        {records.length > 0 && (
+                          <>
+                            <XMLTable 
+                              records={filteredRecords} 
+                              allRecords={records}
+                              selectedMod={selectedMod} 
+                              onModChange={setSelectedMod}
+                              selectedCnpj={selectedCnpj}
+                              onCnpjChange={setSelectedCnpj}
+                              cnpjsList={cnpjsList}
+                              cancelledKeysSet={cancelledKeysSet}
+                            />
+                            <GapAnalysis records={filteredRecords} />
+                          </>
+                        )}
                       </>
                     )}
-                    {records.length === 0 && !isProcessing && (
+                    {records.length === 0 && cancellations.length === 0 && !isProcessing && (
                       <div className="p-12 text-center border border-dashed border-brand-blue/20 rounded-md text-brand-navy/50 bg-brand-blue/5 animate-in fade-in zoom-in duration-500">
                          <Database className="w-8 h-8 text-brand-blue/20 mx-auto mb-4" />
                          <p className="text-[10px] font-black uppercase tracking-[0.2em]">Nenhum registro importado ainda.</p>
@@ -395,14 +656,9 @@ function App() {
               {activeModule === 'analyze' && activeTab === 'compare' && (
                 <ExcelComparison 
                   xmlRecords={records} 
-                  missingInExcel={missingInExcel}
-                  setMissingInExcel={setMissingInExcel}
-                  missingInXml={missingInXml}
-                  setMissingInXml={setMissingInXml}
-                  compareDone={compareDone}
-                  setCompareDone={setCompareDone}
-                  excelFileName={excelFileName}
-                  setExcelFileName={setExcelFileName}
+                  cnpjsList={cnpjsList}
+                  compareStateByCnpj={compareStateByCnpj}
+                  setCompareStateByCnpj={setCompareStateByCnpj}
                 />
               )}
               
@@ -427,6 +683,13 @@ function App() {
               {activeModule === 'sefaz_sp' && (
                 <SefazSpSaeDownloader />
               )}
+              {activeModule === 'sql_generator' && (
+                <SqlScriptGenerator 
+                  records={records}
+                  cancellations={cancellations}
+                  cnpjsList={cnpjsList}
+                />
+              )}
 
             </div>
 
@@ -439,6 +702,126 @@ function App() {
           Copyright © NextSoft. Feito com 💙 pelos #Nexters
         </p>
       </footer>
+
+      {/* Modal de Limpeza por CNPJ ou Banco Completo */}
+      {isClearModalOpen && (
+        <div className="fixed inset-0 z-50 bg-brand-navy/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white border border-slate-100 rounded-md shadow-2xl max-w-lg w-full overflow-hidden animate-in zoom-in-95 duration-200">
+            {/* Header do Modal */}
+            <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Trash2 className="text-brand-melon w-5 h-5" />
+                <h3 className="text-[11px] font-black uppercase tracking-[0.2em] text-brand-navy">Excluir Registros</h3>
+              </div>
+              <button 
+                onClick={() => setIsClearModalOpen(false)}
+                className="text-slate-400 hover:text-brand-navy p-1 transition-colors rounded"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Conteúdo do Modal */}
+            <div className="p-6 space-y-5">
+              <p className="text-xs text-brand-navy/70 leading-relaxed font-medium">
+                Selecione se deseja excluir os XMLs de <strong className="text-brand-navy font-bold">todos os CNPJs</strong> ou de uma <strong className="text-brand-navy font-bold">empresa específica</strong>:
+              </p>
+
+              <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                {/* Opção: Todos os CNPJs */}
+                <label 
+                  onClick={() => setSelectedClearCnpj('all')}
+                  className={cn(
+                    "p-3.5 rounded-md border flex items-center justify-between cursor-pointer transition-all",
+                    selectedClearCnpj === 'all'
+                      ? "border-brand-melon bg-brand-melon/5 shadow-sm"
+                      : "border-slate-200/70 hover:border-slate-300 bg-slate-50/30"
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <input 
+                      type="radio" 
+                      name="clearOption" 
+                      checked={selectedClearCnpj === 'all'} 
+                      onChange={() => setSelectedClearCnpj('all')}
+                      className="accent-brand-melon"
+                    />
+                    <div>
+                      <span className="text-[11px] font-black uppercase tracking-widest text-brand-navy block">
+                        Limpar Banco Completo (Todos os CNPJs)
+                      </span>
+                      <span className="text-[10px] text-brand-navy/60 font-medium">
+                        Remove todos os {records.length} XMLs importados
+                      </span>
+                    </div>
+                  </div>
+                </label>
+
+                {/* Opção por CNPJ individual */}
+                {cnpjsList.map(item => (
+                  <label 
+                    key={item.cnpj}
+                    onClick={() => setSelectedClearCnpj(item.cnpj)}
+                    className={cn(
+                      "p-3.5 rounded-md border flex items-center justify-between cursor-pointer transition-all",
+                      selectedClearCnpj === item.cnpj
+                        ? "border-brand-melon bg-brand-melon/5 shadow-sm"
+                        : "border-slate-200/70 hover:border-slate-300 bg-slate-50/30"
+                    )}
+                  >
+                    <div className="flex items-center gap-3">
+                      <input 
+                        type="radio" 
+                        name="clearOption" 
+                        checked={selectedClearCnpj === item.cnpj} 
+                        onChange={() => setSelectedClearCnpj(item.cnpj)}
+                        className="accent-brand-melon"
+                      />
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-mono font-bold text-brand-navy">
+                            {formatCNPJ(item.cnpj)}
+                          </span>
+                          {item.name && (
+                            <span className="text-[10px] text-brand-navy/60 font-medium truncate max-w-[180px]">
+                              ({item.name})
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-brand-navy/50 font-medium">
+                          {item.count} cupons deste CNPJ
+                        </span>
+                      </div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+
+              <div className="p-3 bg-amber-500/10 border border-amber-500/20 text-amber-800 rounded text-[10px] font-bold flex items-center gap-2">
+                <AlertCircle size={14} className="shrink-0 text-amber-600" />
+                <span>Esta ação é irreversível e removerá os dados do seu navegador local.</span>
+              </div>
+            </div>
+
+            {/* Ações do Modal */}
+            <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-end gap-3">
+              <button
+                onClick={() => setIsClearModalOpen(false)}
+                className="px-4 py-2 text-[10px] font-black uppercase tracking-widest text-brand-navy/60 hover:text-brand-navy bg-white border border-slate-200 hover:bg-slate-100 rounded transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleConfirmClear}
+                className="px-5 py-2 text-[10px] font-black uppercase tracking-widest text-white bg-brand-melon hover:bg-rose-600 rounded transition-all shadow-md shadow-brand-melon/20 active:scale-95 flex items-center gap-1.5"
+              >
+                <Trash2 size={12} />
+                Confirmar Exclusão
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
