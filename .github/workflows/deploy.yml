@@ -1,0 +1,164 @@
+name: Deploy to Windows Server (IIS)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Permite apenas um deploy concorrente por branch/tag para evitar conflitos no IIS
+concurrency:
+  group: deploy-iis-production
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    name: Build & Deploy to IIS
+    runs-on: [self-hosted, windows]
+    
+    env:
+      # Diretório alvo da aplicação no IIS (pode ser customizado via GitHub Variables: vars.IIS_DEPLOY_PATH)
+      IIS_DEPLOY_PATH: ${{ vars.IIS_DEPLOY_PATH || 'E:\PROGRAMAS\LeitorXML\dist' }}
+      # Diretório para histórico/backup antes do deploy
+      IIS_BACKUP_PATH: ${{ vars.IIS_BACKUP_PATH || 'E:\PROGRAMAS\LeitorXML\backups' }}
+      # Nome do Application Pool do IIS (opcional, configurável via vars.IIS_APP_POOL)
+      IIS_APP_POOL: ${{ vars.IIS_APP_POOL || '' }}
+
+    defaults:
+      run:
+        shell: powershell
+
+    steps:
+      - name: 📥 Checkout da Tag
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Setup do Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: 📦 Instalação de Dependências
+        run: |
+          Write-Host "Instalando dependencias com npm ci..."
+          npm ci
+
+      - name: 🔨 Compilação do Projeto (Build de Produção)
+        run: |
+          Write-Host "Executando build da aplicacao Vite..."
+          npm run build
+
+      - name: 🔍 Verificação dos Artefatos de Build
+        run: |
+          if (!(Test-Path -Path "dist\index.html")) {
+            throw "Erro critico: dist/index.html nao foi gerado."
+          }
+          if (!(Test-Path -Path "dist\web.config")) {
+            Write-Warning "Aviso: dist/web.config nao encontrado. Copiando da pasta public..."
+            if (Test-Path -Path "public\web.config") {
+              Copy-Item -Path "public\web.config" -Destination "dist\web.config" -Force
+            }
+          }
+          Write-Host "Artefatos validados com sucesso na pasta dist/."
+
+      - name: 💾 Backup da Versão Anterior
+        run: |
+          $deployPath = $env:IIS_DEPLOY_PATH
+          $backupBase = $env:IIS_BACKUP_PATH
+          $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+          $backupTarget = Join-Path $backupBase $timestamp
+
+          if (Test-Path -Path $deployPath) {
+            $hasFiles = Get-ChildItem -Path $deployPath -Force | Select-Object -First 1
+            if ($hasFiles) {
+              Write-Host "Criando backup da versao atual em: $backupTarget"
+              New-Item -ItemType Directory -Path $backupTarget -Force | Out-Null
+              
+              # Copia os arquivos atuais para a pasta de backup
+              Copy-Item -Path "$deployPath\*" -Destination $backupTarget -Recurse -Force
+              Write-Host "Backup concluido com sucesso."
+              
+              # Mantém apenas os 5 backups mais recentes
+              $allBackups = Get-ChildItem -Path $backupBase -Directory | Sort-Object CreationTime -Descending
+              if ($allBackups.Count -gt 5) {
+                $allBackups | Select-Object -Skip 5 | ForEach-Object {
+                  Write-Host "Removendo backup antigo: $($_.FullName)"
+                  Remove-Item -Path $_.FullName -Recurse -Force
+                }
+              }
+            } else {
+              Write-Host "Diretorio de deploy existe, mas esta vazio. Backup ignorado."
+            }
+          } else {
+            Write-Host "Primeiro deploy detectado: criando diretorio $deployPath"
+            New-Item -ItemType Directory -Path $deployPath -Force | Out-Null
+          }
+
+      - name: 🚀 Deploy dos Arquivos no IIS
+        run: |
+          $sourcePath = (Resolve-Path "dist").Path
+          $targetPath = $env:IIS_DEPLOY_PATH
+
+          Write-Host "Sincronizando arquivos de '$sourcePath' para '$targetPath'..."
+
+          # Garante que a pasta de destino exista
+          if (!(Test-Path -Path $targetPath)) {
+            New-Item -ItemType Directory -Path $targetPath -Force | Out-Null
+          }
+
+          # Robocopy com espelhamento (/MIR) para remover arquivos obsoletos e atualizar os novos
+          # Códigos de retorno do Robocopy de 0 a 7 indicam sucesso
+          $robocopyArgs = @(
+            $sourcePath,
+            $targetPath,
+            "/MIR",
+            "/R:3",
+            "/W:2",
+            "/NP",
+            "/NFL",
+            "/NDL"
+          )
+
+          & robocopy.exe @robocopyArgs
+          $exitCode = $LASTEXITCODE
+
+          if ($exitCode -gt 7) {
+            throw "Falha critica durante a copia de arquivos via Robocopy (Exit Code: $exitCode)."
+          } else {
+            Write-Host "Arquivos sincronizados com sucesso (Robocopy Exit Code: $exitCode)."
+          }
+
+      - name: 🔄 Reciclagem do Application Pool do IIS (Opcional)
+        run: |
+          $appPool = $env:IIS_APP_POOL
+          $appcmd = "$env:SystemRoot\System32\inetsrv\appcmd.exe"
+
+          if ($appPool -and (Test-Path -Path $appcmd)) {
+            Write-Host "Reciclando o Application Pool: $appPool"
+            & $appcmd recycle apppool /apppool.name:"$appPool"
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "Application Pool $appPool reciclado com sucesso."
+            } else {
+              Write-Warning "Nao foi possivel reciclar o Application Pool (Exit Code: $LASTEXITCODE). Verifique as permissoes do runner."
+            }
+          } elseif ($appPool) {
+            Write-Warning "appcmd.exe nao encontrado em $appcmd. Reciclagem ignorada."
+          } else {
+            Write-Host "Nenhum Application Pool especificado em IIS_APP_POOL. Etapa concluida."
+          }
+
+      - name: ✅ Validação Final do Deploy
+        run: |
+          $targetPath = $env:IIS_DEPLOY_PATH
+          $indexPath = Join-Path $targetPath "index.html"
+          $configPath = Join-Path $targetPath "web.config"
+
+          if (!(Test-Path -Path $indexPath)) {
+            throw "Validacao falhou: '$indexPath' nao encontrado apos o deploy."
+          }
+
+          Write-Host "=========================================="
+          Write-Host "🎉 DEPLOY CONCLUÍDO COM SUCESSO NO IIS!"
+          Write-Host "Destino: $targetPath"
+          Write-Host "Tag: $env:GITHUB_REF_NAME"
+          Write-Host "index.html e web.config presentes e validados."
+          Write-Host "=========================================="
