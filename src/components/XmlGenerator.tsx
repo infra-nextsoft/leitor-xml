@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { FileDown, AlertCircle, CheckCircle2, Loader2, Calendar, Lock, Building2, HelpCircle, ShieldCheck, FileKey, Clock } from 'lucide-react';
+import { FileDown, AlertCircle, CheckCircle2, Loader2, Calendar, Lock, Building2, HelpCircle, ShieldCheck, FileKey } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { getSettings } from '../lib/settings';
 
@@ -9,9 +9,7 @@ export function XmlGenerator() {
   const [formData, setFormData] = useState({
     tpAmb: '1', // default: 1 = Produção
     ini: '',
-    horaIni: '00:00',
     fim: '',
-    horaFim: '23:59',
     cnpj: settings.cnpjPadrao || '',
     senha: settings.lembrarSenha ? settings.senhaCertificado : '',
   });
@@ -96,13 +94,11 @@ export function XmlGenerator() {
         }
       }
 
-      // 2. Formata as datas estritamente no padrão exigido pela API: YYYY-MM-DDTHH:MM
-      const formattedIni = formData.ini.includes('T') 
-        ? formData.ini.substring(0, 16) 
-        : `${formData.ini}T${formData.horaIni || '00:00'}`;
-      const formattedFim = formData.fim.includes('T') 
-        ? formData.fim.substring(0, 16) 
-        : `${formData.fim}T${formData.horaFim || '23:59'}`;
+      // 2. Formata as datas estritamente no padrão exigido pela API: YYYY-MM-DDTHH:MM (início do dia 00:00 e fim do dia 23:59)
+      const rawIni = formData.ini.split('T')[0];
+      const rawFim = formData.fim.split('T')[0];
+      const formattedIni = `${rawIni}T00:00`;
+      const formattedFim = `${rawFim}T23:59`;
 
       // 3. Consulta e Download via GET com parâmetros na URL conforme especificação da API do Concentrador
       const queryParams = new URLSearchParams({
@@ -273,54 +269,30 @@ export function XmlGenerator() {
               {/* Periodo de Consulta */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
-                  <label className="block text-[10px] font-black text-brand-navy/50 uppercase tracking-[0.2em] mb-2">Data e Hora Inicial</label>
-                  <div className="flex gap-2">
-                    <div className="relative flex-1">
-                      <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-brand-blue/30" />
-                      <input
-                        type="date"
-                        name="ini"
-                        value={formData.ini}
-                        onChange={handleInputChange}
-                        className="w-full pl-12 pr-4 py-3 bg-white border border-brand-blue/10 rounded-md text-brand-navy text-xs font-bold focus:border-brand-blue outline-none transition-all shadow-sm"
-                      />
-                    </div>
-                    <div className="w-28 relative">
-                      <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-brand-blue/30" />
-                      <input
-                        type="time"
-                        name="horaIni"
-                        value={formData.horaIni}
-                        onChange={handleInputChange}
-                        className="w-full pl-9 pr-2 py-3 bg-white border border-brand-blue/10 rounded-md text-brand-navy text-xs font-bold focus:border-brand-blue outline-none transition-all shadow-sm font-mono"
-                      />
-                    </div>
+                  <label className="block text-[10px] font-black text-brand-navy/50 uppercase tracking-[0.2em] mb-2">Data Inicial</label>
+                  <div className="relative">
+                    <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-brand-blue/30" />
+                    <input
+                      type="date"
+                      name="ini"
+                      value={formData.ini}
+                      onChange={handleInputChange}
+                      className="w-full pl-12 pr-4 py-3 bg-white border border-brand-blue/10 rounded-md text-brand-navy text-xs font-bold focus:border-brand-blue outline-none transition-all shadow-sm"
+                    />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-black text-brand-navy/50 uppercase tracking-[0.2em] mb-2">Data e Hora Final</label>
-                  <div className="flex gap-2">
-                    <div className="relative flex-1">
-                      <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-brand-blue/30" />
-                      <input
-                        type="date"
-                        name="fim"
-                        value={formData.fim}
-                        onChange={handleInputChange}
-                        className="w-full pl-12 pr-4 py-3 bg-white border border-brand-blue/10 rounded-md text-brand-navy text-xs font-bold focus:border-brand-blue outline-none transition-all shadow-sm"
-                      />
-                    </div>
-                    <div className="w-28 relative">
-                      <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-brand-blue/30" />
-                      <input
-                        type="time"
-                        name="horaFim"
-                        value={formData.horaFim}
-                        onChange={handleInputChange}
-                        className="w-full pl-9 pr-2 py-3 bg-white border border-brand-blue/10 rounded-md text-brand-navy text-xs font-bold focus:border-brand-blue outline-none transition-all shadow-sm font-mono"
-                      />
-                    </div>
+                  <label className="block text-[10px] font-black text-brand-navy/50 uppercase tracking-[0.2em] mb-2">Data Final</label>
+                  <div className="relative">
+                    <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-brand-blue/30" />
+                    <input
+                      type="date"
+                      name="fim"
+                      value={formData.fim}
+                      onChange={handleInputChange}
+                      className="w-full pl-12 pr-4 py-3 bg-white border border-brand-blue/10 rounded-md text-brand-navy text-xs font-bold focus:border-brand-blue outline-none transition-all shadow-sm"
+                    />
                   </div>
                 </div>
               </div>
