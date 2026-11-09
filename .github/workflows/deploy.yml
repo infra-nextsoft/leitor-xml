@@ -125,6 +125,8 @@ jobs:
             throw "Falha critica durante a copia de arquivos via Robocopy (Exit Code: $exitCode)."
           } else {
             Write-Host "Arquivos sincronizados com sucesso (Robocopy Exit Code: $exitCode)."
+            # Reseta o LASTEXITCODE para 0 para que o GitHub Actions reconheca o sucesso do Robocopy
+            $global:LASTEXITCODE = 0
           }
 
       - name: 🔄 Reciclagem do Application Pool do IIS (Opcional)
