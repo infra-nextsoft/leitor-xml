@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { FileDown, AlertCircle, CheckCircle2, Loader2, Calendar, Lock, Building2, HelpCircle, ShieldCheck, FileKey } from 'lucide-react';
+import { FileDown, AlertCircle, CheckCircle2, Loader2, Calendar, Lock, Building2, HelpCircle, ShieldCheck, FileKey, Clock } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { getSettings } from '../lib/settings';
 
@@ -9,7 +9,9 @@ export function XmlGenerator() {
   const [formData, setFormData] = useState({
     tpAmb: '1', // default: 1 = Produção
     ini: '',
+    horaIni: '00:00',
     fim: '',
+    horaFim: '23:59',
     cnpj: settings.cnpjPadrao || '',
     senha: settings.lembrarSenha ? settings.senhaCertificado : '',
   });
@@ -94,12 +96,20 @@ export function XmlGenerator() {
         }
       }
 
-      // 2. Consulta e Download via GET com parâmetros na URL conforme especificação da API do Concentrador
+      // 2. Formata as datas estritamente no padrão exigido pela API: YYYY-MM-DDTHH:MM
+      const formattedIni = formData.ini.includes('T') 
+        ? formData.ini.substring(0, 16) 
+        : `${formData.ini}T${formData.horaIni || '00:00'}`;
+      const formattedFim = formData.fim.includes('T') 
+        ? formData.fim.substring(0, 16) 
+        : `${formData.fim}T${formData.horaFim || '23:59'}`;
+
+      // 3. Consulta e Download via GET com parâmetros na URL conforme especificação da API do Concentrador
       const queryParams = new URLSearchParams({
         'api-version': apiVersion,
         tpAmb: String(formData.tpAmb),
-        ini: formData.ini,
-        fim: formData.fim,
+        ini: formattedIni,
+        fim: formattedFim,
         cnpj: formData.cnpj,
         senha: formData.senha
       });
@@ -120,7 +130,7 @@ export function XmlGenerator() {
           if (errText) {
             try {
               const errJson = JSON.parse(errText);
-              errorMsg = errJson.mensagem || errJson.message || errJson.error || errText;
+              errorMsg = errJson.mensagem || errJson.message || errJson.xMotivo || errJson.error || errText;
             } catch {
               errorMsg = errText;
             }
@@ -129,25 +139,64 @@ export function XmlGenerator() {
         throw new Error(errorMsg);
       }
 
-      const blob = await response.blob();
+      // A API do Gin6 Concentrador retorna um JSON (ListarChavesSefazSPViewModel) contendo:
+      // { cStat, xMotivo, chaves: [], zipBase64: "...", zipFileName: "..." }
+      const responseText = await response.text();
+      let parsedJson: any = null;
+      try {
+        parsedJson = JSON.parse(responseText);
+      } catch {
+        // Resposta não é JSON (binário direto)
+      }
+
+      if (parsedJson && typeof parsedJson === 'object') {
+        const cStat = String(parsedJson.cStat || '');
+        const xMotivo = parsedJson.xMotivo || parsedJson.mensagem || parsedJson.message || '';
+        const chaves = Array.isArray(parsedJson.chaves) ? parsedJson.chaves : [];
+        const zipBase64 = parsedJson.zipBase64;
+        const zipFileName = parsedJson.zipFileName || `xml_download_${formData.cnpj}_${formData.ini.replace(/-/g, '')}_${formData.fim.replace(/-/g, '')}.zip`;
+
+        if (!zipBase64) {
+          // Nenhum arquivo gerado (ex: cStat 137 ou sem notas autorizadas)
+          setStatus({
+            type: 'error',
+            message: xMotivo ? `${xMotivo}${cStat ? ` (cStat ${cStat})` : ''}` : 'Nenhum XML localizado para o período e CNPJ informados.',
+          });
+          return;
+        }
+
+        // Converte o zipBase64 em Blob binário
+        const byteCharacters = atob(zipBase64);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'application/zip' });
+
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = zipFileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+
+        const countMsg = chaves.length > 0 ? `${chaves.length} XML(s) baixados com sucesso!` : 'Download concluído com sucesso!';
+        setStatus({
+          type: 'success',
+          message: `${countMsg} (${xMotivo || 'Autorizado'})`,
+        });
+        return;
+      }
+
+      // Fallback para caso venha como stream binário direto
+      const blob = new Blob([responseText], { type: contentType || 'application/zip' });
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-
-      // Obter o nome do arquivo a partir dos cabeçalhos se possível
-      const disposition = response.headers.get('content-disposition');
-      let filename = `xml_download_${formData.cnpj}_${formData.ini.replace(/-/g, '')}_${formData.fim.replace(/-/g, '')}.zip`;
-      
-      if (disposition && disposition.indexOf('filename=') !== -1) {
-        const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
-        if (matches != null && matches[1]) {
-          filename = matches[1].replace(/['"]/g, '');
-        }
-      } else if (contentType.includes('xml')) {
-        filename = `xml_download_${formData.cnpj}.xml`;
-      }
-
-      link.download = filename;
+      link.download = `xml_download_${formData.cnpj}.zip`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -224,30 +273,54 @@ export function XmlGenerator() {
               {/* Periodo de Consulta */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
-                  <label className="block text-[10px] font-black text-brand-navy/50 uppercase tracking-[0.2em] mb-2">Data Inicial</label>
-                  <div className="relative">
-                    <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-brand-blue/30" />
-                    <input
-                      type="date"
-                      name="ini"
-                      value={formData.ini}
-                      onChange={handleInputChange}
-                      className="w-full pl-12 pr-4 py-3 bg-white border border-brand-blue/10 rounded-md text-brand-navy text-xs font-bold focus:border-brand-blue outline-none transition-all shadow-sm"
-                    />
+                  <label className="block text-[10px] font-black text-brand-navy/50 uppercase tracking-[0.2em] mb-2">Data e Hora Inicial</label>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-brand-blue/30" />
+                      <input
+                        type="date"
+                        name="ini"
+                        value={formData.ini}
+                        onChange={handleInputChange}
+                        className="w-full pl-12 pr-4 py-3 bg-white border border-brand-blue/10 rounded-md text-brand-navy text-xs font-bold focus:border-brand-blue outline-none transition-all shadow-sm"
+                      />
+                    </div>
+                    <div className="w-28 relative">
+                      <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-brand-blue/30" />
+                      <input
+                        type="time"
+                        name="horaIni"
+                        value={formData.horaIni}
+                        onChange={handleInputChange}
+                        className="w-full pl-9 pr-2 py-3 bg-white border border-brand-blue/10 rounded-md text-brand-navy text-xs font-bold focus:border-brand-blue outline-none transition-all shadow-sm font-mono"
+                      />
+                    </div>
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-black text-brand-navy/50 uppercase tracking-[0.2em] mb-2">Data Final</label>
-                  <div className="relative">
-                    <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-brand-blue/30" />
-                    <input
-                      type="date"
-                      name="fim"
-                      value={formData.fim}
-                      onChange={handleInputChange}
-                      className="w-full pl-12 pr-4 py-3 bg-white border border-brand-blue/10 rounded-md text-brand-navy text-xs font-bold focus:border-brand-blue outline-none transition-all shadow-sm"
-                    />
+                  <label className="block text-[10px] font-black text-brand-navy/50 uppercase tracking-[0.2em] mb-2">Data e Hora Final</label>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-brand-blue/30" />
+                      <input
+                        type="date"
+                        name="fim"
+                        value={formData.fim}
+                        onChange={handleInputChange}
+                        className="w-full pl-12 pr-4 py-3 bg-white border border-brand-blue/10 rounded-md text-brand-navy text-xs font-bold focus:border-brand-blue outline-none transition-all shadow-sm"
+                      />
+                    </div>
+                    <div className="w-28 relative">
+                      <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-brand-blue/30" />
+                      <input
+                        type="time"
+                        name="horaFim"
+                        value={formData.horaFim}
+                        onChange={handleInputChange}
+                        className="w-full pl-9 pr-2 py-3 bg-white border border-brand-blue/10 rounded-md text-brand-navy text-xs font-bold focus:border-brand-blue outline-none transition-all shadow-sm font-mono"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
