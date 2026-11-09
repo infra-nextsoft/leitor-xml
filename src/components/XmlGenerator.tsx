@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { FileDown, AlertCircle, CheckCircle2, Loader2, Calendar, Lock, Building2, HelpCircle } from 'lucide-react';
+import { FileDown, AlertCircle, CheckCircle2, Loader2, Calendar, Lock, Building2, HelpCircle, ShieldCheck, FileKey } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { getSettings } from '../lib/settings';
 
@@ -14,6 +14,9 @@ export function XmlGenerator() {
     senha: settings.lembrarSenha ? settings.senhaCertificado : '',
   });
 
+  const [certificadoBase64, setCertificadoBase64] = useState<string>(settings.certificadoBase64 || '');
+  const [certFileName, setCertFileName] = useState<string>(settings.certFileName || '');
+
   const [isProcessing, setIsProcessing] = useState(false);
   const [status, setStatus] = useState<{ type: 'idle' | 'success' | 'error'; message: string }>({
     type: 'idle',
@@ -27,6 +30,29 @@ export function XmlGenerator() {
     } else {
       setFormData(prev => ({ ...prev, [name]: value }));
     }
+  };
+
+  const handleCertUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.endsWith('.pfx')) {
+      setStatus({ type: 'error', message: 'Por favor, selecione um certificado válido (.pfx)' });
+      return;
+    }
+
+    setCertFileName(file.name);
+    setStatus({ type: 'idle', message: '' });
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      const result = evt.target?.result as string;
+      const base64Data = result.split('base64,')[1];
+      if (base64Data) {
+        setCertificadoBase64(base64Data);
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -47,23 +73,42 @@ export function XmlGenerator() {
     setIsProcessing(true);
     setStatus({ type: 'idle', message: '' });
 
-    const payload = {
-      tpAmb: Number(formData.tpAmb),
-      ini: formData.ini,
-      fim: formData.fim,
-      cnpj: formData.cnpj,
-      senha: formData.senha
-    };
+    const apiVersion = settings.apiVersion || '1.14';
 
     try {
-      const apiVersion = settings.apiVersion || '1.14';
-      const response = await fetch(`${settings.apiUrl}/api/v1/nfce/DownloadXML?api-version=${apiVersion}`, {
-        method: 'POST',
+      // 1. Se houver certificado em Base64, sincroniza previamente com a API do Concentrador
+      if (certificadoBase64) {
+        try {
+          await fetch(`${settings.apiUrl}/api/v1/nfce/SalvarCertificado?api-version=${apiVersion}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              cnpj: formData.cnpj,
+              certificado: certificadoBase64
+            })
+          });
+        } catch (saveErr) {
+          console.warn('Aviso ao sincronizar certificado:', saveErr);
+        }
+      }
+
+      // 2. Consulta e Download via GET com parâmetros na URL conforme especificação da API do Concentrador
+      const queryParams = new URLSearchParams({
+        'api-version': apiVersion,
+        tpAmb: String(formData.tpAmb),
+        ini: formData.ini,
+        fim: formData.fim,
+        cnpj: formData.cnpj,
+        senha: formData.senha
+      });
+
+      const response = await fetch(`${settings.apiUrl}/api/v1/nfce/DownloadXML?${queryParams.toString()}`, {
+        method: 'GET',
         headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json, application/zip, application/xml, text/plain, */*'
-        },
-        body: JSON.stringify(payload)
+          'Accept': 'application/json, application/zip, application/xml, application/octet-stream, */*'
+        }
       });
 
       const contentType = response.headers.get('content-type') || '';
@@ -75,7 +120,7 @@ export function XmlGenerator() {
           if (errText) {
             try {
               const errJson = JSON.parse(errText);
-              errorMsg = errJson.message || errJson.error || errText;
+              errorMsg = errJson.mensagem || errJson.message || errJson.error || errText;
             } catch {
               errorMsg = errText;
             }
@@ -207,6 +252,42 @@ export function XmlGenerator() {
                 </div>
               </div>
 
+              {/* Upload Certificado Digital (.pfx) */}
+              <div>
+                <label className="block text-[10px] font-black text-brand-navy/50 uppercase tracking-[0.2em] mb-2 flex items-center justify-between">
+                  <span>Certificado Digital (.pfx)</span>
+                  {certFileName && (
+                    <span className="text-emerald-600 font-bold flex items-center gap-1">
+                      <ShieldCheck size={12} />
+                      {certFileName}
+                    </span>
+                  )}
+                </label>
+                <div className="relative">
+                  <input
+                    type="file"
+                    accept=".pfx"
+                    id="pfx-upload"
+                    onChange={handleCertUpload}
+                    className="hidden"
+                  />
+                  <label
+                    htmlFor="pfx-upload"
+                    className="w-full flex items-center justify-between px-4 py-3 bg-white border border-brand-blue/10 hover:border-brand-blue/30 rounded-md cursor-pointer transition-all shadow-sm group"
+                  >
+                    <div className="flex items-center gap-2">
+                      <FileKey className="w-4 h-4 text-brand-blue/40 group-hover:text-brand-blue transition-colors" />
+                      <span className="text-xs font-bold text-brand-navy">
+                        {certFileName ? certFileName : 'Selecionar arquivo .pfx (opcional se já salvo na API)...'}
+                      </span>
+                    </div>
+                    <span className="text-[9px] font-black uppercase tracking-widest text-brand-blue bg-brand-blue/5 px-2 py-1 rounded">
+                      Procurar
+                    </span>
+                  </label>
+                </div>
+              </div>
+
               {/* Senha do Certificado */}
               <div>
                 <label className="block text-[10px] font-black text-brand-navy/50 uppercase tracking-[0.2em] mb-2">Senha do Certificado Digital</label>
@@ -229,7 +310,7 @@ export function XmlGenerator() {
                 <div className="flex flex-col">
                   <span className="text-[10px] font-black text-brand-navy uppercase tracking-widest leading-none mb-1">Nota importante</span>
                   <p className="text-[10px] text-brand-navy/70 font-medium leading-relaxed uppercase tracking-[0.05em]">
-                    O certificado digital deve estar na pasta <code className="font-mono bg-white/80 border border-brand-blue/5 px-1 py-0.5 rounded text-brand-blue font-bold">C:\Gin6\Concentrador\Certificados</code> no servidor da API local.
+                    Se o certificado já estiver salvo na pasta <code className="font-mono bg-white/80 border border-brand-blue/5 px-1 py-0.5 rounded text-brand-blue font-bold">C:\Gin6\Concentrador\Certificados</code>, basta informar a senha. Caso contrário, selecione o arquivo .pfx acima para sincronizá-lo automaticamente com a API.
                   </p>
                 </div>
               </div>

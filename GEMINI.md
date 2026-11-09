@@ -55,6 +55,15 @@ Utilizado para importação de planilhas com feedback visual imediato.
 - **Persistence**: Dados locais salvos via Dexie (IndexedDB) para persistência entre sessões.
 - **Excel**: Uso da biblioteca `xlsx` para leitura e exportação.
 
+### Versionamento & Deploy
+- **Versionamento Semântico (SemVer)**: Atualizar obrigatoriamente o campo `"version"` no `package.json` a cada nova entrega (`MAJOR.MINOR.PATCH`).
+- **Gatilho de Deploy (Git Tags)**: O pipeline de deploy no GitHub Actions é disparado exclusivamente por tags Git que iniciam com `v` (ex: `v1.0.0`, `v1.0.1`).
+- **Fluxo de Release**:
+  1. Atualizar `"version"` em `package.json`.
+  2. Commitar e enviar para a branch `main`.
+  3. Criar a tag correspondente: `git tag vX.Y.Z`.
+  4. Enviar a tag: `git push origin vX.Y.Z`.
+
 ---
 
 ## 📁 Estrutura de Arquivos
@@ -68,3 +77,4 @@ Utilizado para importação de planilhas com feedback visual imediato.
 1. **No Placeholders**: Nunca use imagens ou textos genéricos. Use o design system.
 2. **Performance First**: Se a operação puder durar mais de 100ms, use um Worker ou feedback visual imediato.
 3. **Consistency**: Siga os tokens de cor e tipografia rigorosamente. Não use cores ad-hoc.
+4. **Version Tagging**: Toda entrega para produção exige atualização da versão no `package.json` e envio da tag Git com prefixo `v` (`vX.Y.Z`) para acionamento do deploy automático.
