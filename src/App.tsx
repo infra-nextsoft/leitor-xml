@@ -11,7 +11,6 @@ import BatchDownloader from './components/BatchDownloader'
 import NfceInutilization from './components/NfceInutilization'
 import { XmlGenerator } from './components/XmlGenerator'
 import { SettingsPanel } from './components/SettingsPanel'
-import { SefazSpSaeDownloader } from './components/SefazSpSaeDownloader'
 import { formatCurrency, formatCNPJ, cn } from './lib/utils'
 import { 
   Database, 
@@ -24,7 +23,6 @@ import {
   Settings, 
   ChevronRight, 
   ArrowLeft,
-  DownloadCloud,
   Building2,
   X,
   AlertCircle,
@@ -38,7 +36,7 @@ function App() {
   const [cancellations, setCancellations] = useState<CancellationRecord[]>([])
   const [progress, setProgress] = useState({ current: 0, total: 0 })
   const [isProcessing, setIsProcessing] = useState(false)
-  const [activeModule, setActiveModule] = useState<'home' | 'analyze' | 'homologate' | 'inutilize' | 'generate_xml' | 'settings' | 'sefaz_sp' | 'sql_generator'>('home')
+  const [activeModule, setActiveModule] = useState<'home' | 'analyze' | 'homologate' | 'inutilize' | 'generate_xml' | 'settings' | 'sql_generator'>('home')
   const [activeTab, setActiveTab] = useState<'import' | 'compare' | 'gaps' | 'homologate' | 'batch_homologate' | 'inutilize' | 'generate_xml' | 'settings'>('import')
   const [selectedMod, setSelectedMod] = useState<'all' | '55' | '65'>('all')
   const [selectedCnpj, setSelectedCnpj] = useState<string>('all')
@@ -354,7 +352,7 @@ function App() {
                 <div className="mt-4">
                   <h3 className="text-brand-navy text-[10px] font-black uppercase tracking-[0.2em] mb-1.5">Gerar XML</h3>
                   <p className="text-brand-navy/50 text-[10px] uppercase tracking-[0.1em] font-medium leading-relaxed">
-                    Geração e empacotamento em lote de arquivos XML a partir de colunas correspondentes em planilhas Excel.
+                    Consulta e download em lote de arquivos XML (ZIP) na SEFAZ-SP via API do Concentrador com certificado digital.
                   </p>
                 </div>
               </div>
@@ -378,26 +376,7 @@ function App() {
                 </div>
               </div>
 
-              {/* Card 6: Consulta SEFAZ-SP (SAE) */}
-              <div 
-                onClick={() => { setActiveModule('sefaz_sp'); }}
-                className="bg-white border border-brand-blue/5 p-6 rounded-md shadow-[0_2px_10px_-2px_rgba(1,6,36,0.03)] hover:border-brand-blue/30 cursor-pointer transition-all hover:translate-y-[-2px] hover:shadow-[0_10px_25px_-5px_rgba(1,6,36,0.06)] group flex flex-col justify-between min-h-[180px]"
-              >
-                <div className="flex justify-between items-start">
-                  <div className="p-3 bg-slate-50 rounded-md border border-slate-100 shadow-sm group-hover:bg-brand-blue/5 group-hover:border-brand-blue/20 transition-all">
-                    <DownloadCloud className="text-brand-blue w-5 h-5" />
-                  </div>
-                  <ChevronRight size={14} className="text-brand-navy/20 group-hover:text-brand-blue transition-colors" />
-                </div>
-                <div className="mt-4">
-                  <h3 className="text-brand-navy text-[10px] font-black uppercase tracking-[0.2em] mb-1.5">Consulta SEFAZ-SP (SAE)</h3>
-                  <p className="text-brand-navy/50 text-[10px] uppercase tracking-[0.1em] font-medium leading-relaxed">
-                    Consulta do lote de chaves emitidas e download dos XMLs diretamente dos WebServices da SEFAZ-SP.
-                  </p>
-                </div>
-              </div>
-
-              {/* Card 7: Gerador de Script SQL (GRN) */}
+              {/* Card 6: Gerador de Script SQL (GRN) */}
               <div 
                 onClick={() => { setActiveModule('sql_generator'); }}
                 className="bg-white border border-brand-blue/5 p-6 rounded-md shadow-[0_2px_10px_-2px_rgba(1,6,36,0.03)] hover:border-brand-blue/30 cursor-pointer transition-all hover:translate-y-[-2px] hover:shadow-[0_10px_25px_-5px_rgba(1,6,36,0.06)] group flex flex-col justify-between min-h-[180px]"
@@ -443,7 +422,6 @@ function App() {
                   {activeModule === 'inutilize' && 'Inutilização NFCe'}
                   {activeModule === 'generate_xml' && 'Geração de XML'}
                   {activeModule === 'settings' && 'Configurações'}
-                  {activeModule === 'sefaz_sp' && 'Consulta SEFAZ-SP (SAE)'}
                   {activeModule === 'sql_generator' && 'Gerador de Script SQL (GRN)'}
                 </h2>
               </div>
@@ -679,9 +657,6 @@ function App() {
               )}
               {activeModule === 'settings' && (
                 <SettingsPanel />
-              )}
-              {activeModule === 'sefaz_sp' && (
-                <SefazSpSaeDownloader />
               )}
               {activeModule === 'sql_generator' && (
                 <SqlScriptGenerator 
